@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mantra Counter</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Mantra Counter</h1>
+        </header>
+
+        <main>
+            <!-- Goal Setting -->
+            <section class="goal-section">
+                <label for="goal-input">Goal</label>
+                <div class="goal-controls">
+                    <input type="number" id="goal-input" min="1" value="108" placeholder="108">
+                    <button id="set-goal-btn">Set Goal</button>
+                </div>
+            </section>
+
+            <!-- Counter Display -->
+            <section class="counter-section">
+                <div class="counter-display">
+                    <span id="current-count">0</span>
+                    <span class="separator">/</span>
+                    <span id="goal-display">108</span>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <div class="progress-percent" id="progress-percent">0%</div>
+            </section>
+
+            <!-- Recording Controls -->
+            <section class="recording-section">
+                <div class="status" id="status">Ready to record mantra template</div>
+
+                <div class="recording-controls">
+                    <button id="record-btn" class="btn-primary">Record Mantra</button>
+                    <button id="confirm-btn" class="btn-secondary" disabled>Confirm Mantra</button>
+                </div>
+
+                <div class="listening-controls" style="display: none;">
+                    <button id="start-listening-btn" class="btn-primary">Start Listening</button>
+                    <button id="stop-listening-btn" class="btn-danger" disabled>Stop Listening</button>
+                    <button id="reset-btn" class="btn-secondary">Reset Mantra</button>
+                </div>
+            </section>
+
+            <!-- Waveform Visualization -->
+            <section class="visualization-section">
+                <canvas id="waveform" width="600" height="100"></canvas>
+            </section>
+
+            <!-- Test Mode -->
+            <section class="test-section">
+                <div class="test-toggle">
+                    <label>
+                        <input type="checkbox" id="test-mode-toggle">
+                        Test Mode (Record mantra + 5 repetitions)
+                    </label>
+                </div>
+                <div class="test-controls" style="display: none;">
+                    <button id="run-test-btn" class="btn-primary">Run Test</button>
+                    <div class="test-results" id="test-results"></div>
+                </div>
+            </section>
+
+            <!-- Debug/Tuning -->
+            <section class="tuning-section">
+                <details>
+                    <summary>Tuning Settings</summary>
+                    <div class="tuning-controls">
+                        <label>
+                            Similarity Threshold: <span id="threshold-value">0.75</span>
+                            <input type="range" id="threshold-slider" min="0.3" max="0.95" step="0.05" value="0.75">
+                        </label>
+                        <label>
+                            Debounce Time (ms): <span id="debounce-value">2000</span>
+                            <input type="range" id="debounce-slider" min="500" max="5000" step="100" value="2000">
+                        </label>
+                    </div>
+                </details>
+            </section>
+
+            <!-- Match Log -->
+            <section class="log-section">
+                <h3>Match Log</h3>
+                <div id="match-log" class="match-log"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+

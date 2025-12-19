@@ -154,6 +154,16 @@ class MantraCounter {
     setupCanvas() {
         this.waveformCanvas = this.elements.waveform;
         this.waveformCtx = this.waveformCanvas.getContext('2d');
+        this.resizeCanvas();
+
+        // Re-resize on window resize
+        window.addEventListener('resize', () => {
+            this.resizeCanvas();
+        });
+    }
+
+    resizeCanvas() {
+        if (!this.waveformCanvas || !this.waveformCtx) return;
         this.waveformCanvas.width = this.waveformCanvas.offsetWidth * window.devicePixelRatio;
         this.waveformCanvas.height = this.waveformCanvas.offsetHeight * window.devicePixelRatio;
         this.waveformCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
@@ -226,9 +236,19 @@ class MantraCounter {
         }
     }
 
+    // Detect if we're on a mobile device
+    isMobileDevice() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+               (window.innerWidth <= 768 && 'ontouchstart' in window);
+    }
+
     // Audio initialization
     async initAudio() {
         if (this.audioContext) {
+            // Resume audio context if suspended (required for iOS)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
             // Update gain if already initialized
             if (this.gainNode) {
                 this.gainNode.gain.value = this.micSensitivity;
@@ -238,13 +258,32 @@ class MantraCounter {
 
         try {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+            // Mobile devices often ignore audio constraints, so we make them optional
+            const isMobile = this.isMobileDevice();
+            const audioConstraints = isMobile ? {
+                // On mobile, let the browser use its defaults (often better for mobile mics)
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                // But try to get high quality
+                sampleRate: 48000,
+                channelCount: 1
+            } : {
+                // On desktop, disable processing for raw audio
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            };
+
             this.mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false
-                }
+                audio: audioConstraints
             });
+
+            // Resume audio context (required for iOS)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
 
             this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
@@ -254,13 +293,24 @@ class MantraCounter {
 
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 2048;
-            this.analyser.smoothingTimeConstant = 0.3;
+            this.analyser.smoothingTimeConstant = isMobile ? 0.5 : 0.3; // More smoothing on mobile
 
             // Connect: source -> gain -> analyser
             this.sourceNode.connect(this.gainNode);
             this.gainNode.connect(this.analyser);
 
-            console.log('Audio initialized successfully');
+            console.log('Audio initialized successfully', {
+                isMobile,
+                sampleRate: this.audioContext.sampleRate,
+                state: this.audioContext.state,
+                constraints: audioConstraints
+            });
+
+            // Show helpful message for mobile users
+            if (isMobile) {
+                console.log('Mobile device detected - using mobile-optimized audio settings');
+                console.log('Tip: If detection is not working well, try adjusting the Mic Sensitivity slider');
+            }
         } catch (err) {
             console.error('Error initializing audio:', err);
             this.setStatus('Error: Could not access microphone');
@@ -315,6 +365,12 @@ class MantraCounter {
     // Template recording
     async startRecordingTemplate() {
         await this.initAudio();
+
+        // Ensure audio context is running (required for iOS)
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+            console.log('Audio context resumed for recording');
+        }
 
         this.isRecordingTemplate = true;
         this.audioBuffer = [];
@@ -539,8 +595,11 @@ class MantraCounter {
 
         // Use cosine as primary, with energy gating to filter noise
         // If energy ratio is very low (< 30%), it's likely background noise, not a real mantra
+        // On mobile, be slightly more lenient with energy gating due to different mic characteristics
+        const isMobile = this.isMobileDevice();
+        const energyGateThreshold = isMobile ? 0.25 : 0.3;
         let similarity;
-        if (energyRatio < 0.3) {
+        if (energyRatio < energyGateThreshold) {
             similarity = energyRatio; // Return very low score for noise
         } else {
             similarity = cosine * (0.7 + 0.3 * energyRatio);
@@ -573,6 +632,12 @@ class MantraCounter {
 
         await this.initAudio();
 
+        // Ensure audio context is running (required for iOS)
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+            console.log('Audio context resumed for listening');
+        }
+
         this.isListening = true;
         this.buttonState = 'stop';
         this.updateMainButton();
@@ -593,8 +658,10 @@ class MantraCounter {
         let bufferIndex = 0;
 
         // Continuous matching state
+        const isMobile = this.isMobileDevice();
         let matchStreak = 0; // How many consecutive frames had high similarity
-        const minMatchStreak = 8; // Require sustained match (increased to prevent counting on transitions)
+        // Mobile may need slightly lower streak requirement due to different audio characteristics
+        const minMatchStreak = isMobile ? 6 : 8; // Require sustained match (increased to prevent counting on transitions)
         const checkInterval = 10; // Check every N frames (not every frame for performance)
         let frameCount = 0;
 
@@ -603,7 +670,8 @@ class MantraCounter {
         const energyHistorySize = 20;
 
         // Energy-based activity detection (but don't wait for silence)
-        const minEnergyThreshold = 0.005; // Very low - just to filter out complete silence
+        // Mobile devices may have different audio levels, so adjust threshold
+        const minEnergyThreshold = isMobile ? 0.002 : 0.005; // Lower threshold for mobile
 
         const detect = () => {
             if (!this.isListening) return;
@@ -659,6 +727,18 @@ class MantraCounter {
                 // Check similarity
                 const segmentEnvelope = this.extractEnvelope(segment);
                 const similarity = this.computeSimilarity(this.templateEnvelope, segmentEnvelope);
+
+                // Debug logging for mobile (helps diagnose detection issues)
+                // Only log every 100 frames to avoid spam
+                if (isMobile && frameCount % (checkInterval * 10) === 0) {
+                    console.log('Detection check:', {
+                        rms: rms.toFixed(4),
+                        similarity: (similarity * 100).toFixed(1) + '%',
+                        threshold: (this.similarityThreshold * 100).toFixed(1) + '%',
+                        streak: matchStreak,
+                        inCooldown: this.inCooldown
+                    });
+                }
 
                 // Track match streak - need sustained high similarity
                 if (similarity >= this.similarityThreshold) {
@@ -800,6 +880,9 @@ class MantraCounter {
 
     // Visualization
     startVisualization() {
+        // Ensure canvas is properly sized
+        this.resizeCanvas();
+
         const bufferLength = this.analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
 
@@ -1113,8 +1196,10 @@ class MantraCounter {
             dismissBtn.onclick = dismiss;
         }
 
-        // Play zen chime sound (may not work on mobile Safari due to autoplay restrictions)
-        this.playCompletionSound();
+        // Play zen chime sound
+        this.playCompletionSound().catch(err => {
+            console.warn('Completion sound failed:', err);
+        });
 
         // Create particles
         this.createParticles();
@@ -1153,54 +1238,66 @@ class MantraCounter {
         };
     }
 
-    playCompletionSound() {
+    async playCompletionSound() {
         if (!this.audioContext) return;
 
-        // Note: Audio may not play on mobile Safari due to autoplay restrictions
-        // This is a browser limitation, not a bug
+        try {
+            // Resume audio context if suspended (required for iOS)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+                console.log('Audio context resumed for completion sound');
+            }
 
-        // Create a gentle gong-like sound with fade in/out
-        // Using multiple harmonics for a rich, resonant sound
-        const baseFreq = 220; // A3 - lower, more mellow
-        const harmonics = [
-            { freq: baseFreq, amplitude: 0.15, delay: 0 },
-            { freq: baseFreq * 2, amplitude: 0.12, delay: 50 },
-            { freq: baseFreq * 3, amplitude: 0.08, delay: 100 },
-            { freq: baseFreq * 4.76, amplitude: 0.06, delay: 150 }, // Approximate 5th harmonic
-        ];
+            // Create a gentle gong-like sound with fade in/out
+            // Using multiple harmonics for a rich, resonant sound
+            const baseFreq = 220; // A3 - lower, more mellow
+            const harmonics = [
+                { freq: baseFreq, amplitude: 0.15, delay: 0 },
+                { freq: baseFreq * 2, amplitude: 0.12, delay: 50 },
+                { freq: baseFreq * 3, amplitude: 0.08, delay: 100 },
+                { freq: baseFreq * 4.76, amplitude: 0.06, delay: 150 }, // Approximate 5th harmonic
+            ];
 
-        const duration = 2.5; // Longer, more meditative
-        const fadeInTime = 0.4;
-        const fadeOutTime = 1.8;
+            const duration = 2.5; // Longer, more meditative
+            const fadeInTime = 0.4;
+            const fadeOutTime = 1.8;
 
-        harmonics.forEach((harmonic, i) => {
-            setTimeout(() => {
-                const osc = this.audioContext.createOscillator();
-                const gain = this.audioContext.createGain();
+            harmonics.forEach((harmonic, i) => {
+                setTimeout(() => {
+                    try {
+                        const osc = this.audioContext.createOscillator();
+                        const gain = this.audioContext.createGain();
 
-                // Use a mix of sine and triangle for warmer tone
-                osc.type = i === 0 ? 'sine' : 'triangle';
-                osc.frequency.setValueAtTime(harmonic.freq, this.audioContext.currentTime);
+                        // Use a mix of sine and triangle for warmer tone
+                        osc.type = i === 0 ? 'sine' : 'triangle';
+                        osc.frequency.setValueAtTime(harmonic.freq, this.audioContext.currentTime);
 
-                const now = this.audioContext.currentTime;
+                        const now = this.audioContext.currentTime;
 
-                // Fade in
-                gain.gain.setValueAtTime(0, now);
-                gain.gain.linearRampToValueAtTime(harmonic.amplitude, now + fadeInTime);
+                        // Fade in
+                        gain.gain.setValueAtTime(0, now);
+                        gain.gain.linearRampToValueAtTime(harmonic.amplitude, now + fadeInTime);
 
-                // Hold
-                gain.gain.setValueAtTime(harmonic.amplitude, now + fadeInTime);
+                        // Hold
+                        gain.gain.setValueAtTime(harmonic.amplitude, now + fadeInTime);
 
-                // Fade out (long, gentle decay)
-                gain.gain.exponentialRampToValueAtTime(0.001, now + fadeOutTime);
+                        // Fade out (long, gentle decay)
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + fadeOutTime);
 
-                osc.connect(gain);
-                gain.connect(this.audioContext.destination);
+                        osc.connect(gain);
+                        gain.connect(this.audioContext.destination);
 
-                osc.start(now);
-                osc.stop(now + duration);
-            }, harmonic.delay);
-        });
+                        osc.start(now);
+                        osc.stop(now + duration);
+                    } catch (err) {
+                        console.warn('Error playing harmonic:', err);
+                    }
+                }, harmonic.delay);
+            });
+        } catch (err) {
+            console.warn('Error playing completion sound:', err);
+            // Don't show error to user - sound is optional
+        }
     }
 
     createParticles() {

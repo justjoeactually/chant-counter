@@ -1239,12 +1239,21 @@ class MantraCounter {
     }
 
     async playCompletionSound() {
-        if (!this.audioContext) return;
+        // If audio context is closed or doesn't exist, create a new one just for the sound
+        let audioContext = this.audioContext;
+        let shouldCleanup = false;
+
+        if (!audioContext || audioContext.state === 'closed') {
+            // Create a temporary audio context just for the completion sound
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            shouldCleanup = true;
+            console.log('Created new audio context for completion sound');
+        }
 
         try {
             // Resume audio context if suspended (required for iOS)
-            if (this.audioContext.state === 'suspended') {
-                await this.audioContext.resume();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
                 console.log('Audio context resumed for completion sound');
             }
 
@@ -1265,14 +1274,14 @@ class MantraCounter {
             harmonics.forEach((harmonic, i) => {
                 setTimeout(() => {
                     try {
-                        const osc = this.audioContext.createOscillator();
-                        const gain = this.audioContext.createGain();
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
 
                         // Use a mix of sine and triangle for warmer tone
                         osc.type = i === 0 ? 'sine' : 'triangle';
-                        osc.frequency.setValueAtTime(harmonic.freq, this.audioContext.currentTime);
+                        osc.frequency.setValueAtTime(harmonic.freq, audioContext.currentTime);
 
-                        const now = this.audioContext.currentTime;
+                        const now = audioContext.currentTime;
 
                         // Fade in
                         gain.gain.setValueAtTime(0, now);
@@ -1285,7 +1294,7 @@ class MantraCounter {
                         gain.gain.exponentialRampToValueAtTime(0.001, now + fadeOutTime);
 
                         osc.connect(gain);
-                        gain.connect(this.audioContext.destination);
+                        gain.connect(audioContext.destination);
 
                         osc.start(now);
                         osc.stop(now + duration);
@@ -1294,9 +1303,25 @@ class MantraCounter {
                     }
                 }, harmonic.delay);
             });
+
+            // Clean up temporary audio context after sound finishes (if we created one)
+            if (shouldCleanup) {
+                setTimeout(() => {
+                    try {
+                        if (audioContext && audioContext.state !== 'closed') {
+                            audioContext.close().catch(console.error);
+                        }
+                    } catch (err) {
+                        console.warn('Error closing temporary audio context:', err);
+                    }
+                }, duration * 1000 + 500); // Wait for sound to finish + buffer
+            }
         } catch (err) {
             console.warn('Error playing completion sound:', err);
-            // Don't show error to user - sound is optional
+            // Clean up temporary audio context on error
+            if (shouldCleanup && audioContext && audioContext.state !== 'closed') {
+                audioContext.close().catch(console.error);
+            }
         }
     }
 

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mantra Detection Tests</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --bg-card: #16213e;
+            --text: #eaeaea;
+            --text-muted: #a0a0a0;
+            --success: #4ade80;
+            --danger: #ef4444;
+            --accent: #e94560;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'SF Mono', 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            padding: 2rem;
+            margin: 0;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: var(--accent);
+            font-weight: 300;
+            letter-spacing: 0.1em;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1rem 0;
+        }
+
+        .test-result {
+            padding: 0.75rem 1rem;
+            margin: 0.5rem 0;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .test-result.pass {
+            background: rgba(74, 222, 128, 0.1);
+            border-left: 3px solid var(--success);
+        }
+
+        .test-result.fail {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid var(--danger);
+        }
+
+        .test-name {
+            font-weight: 500;
+        }
+
+        .test-details {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-align: right;
+        }
+
+        .icon { margin-right: 0.5rem; }
+        .icon.pass { color: var(--success); }
+        .icon.fail { color: var(--danger); }
+
+        .summary {
+            font-size: 1.5rem;
+            text-align: center;
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-top: 2rem;
+        }
+
+        .summary.pass {
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--success);
+        }
+
+        .summary.fail {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+        }
+
+        .scores-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        .scores-table th,
+        .scores-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .scores-table th {
+            color: var(--text-muted);
+            font-weight: normal;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.05em;
+        }
+
+        .score-bar {
+            height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .score-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        .score-fill.high { background: var(--success); }
+        .score-fill.medium { background: #fbbf24; }
+        .score-fill.low { background: var(--danger); }
+
+        .no-fixtures {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        .no-fixtures h2 {
+            color: var(--accent);
+        }
+
+        .no-fixtures ol {
+            text-align: left;
+            max-width: 400px;
+            margin: 2rem auto;
+        }
+
+        .no-fixtures li {
+            margin: 0.5rem 0;
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin-top: 1rem;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .fixture-info {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧘 Mantra Detection Tests</h1>
+
+        <div id="content">
+            <div class="card no-fixtures">
+                <h2>No Test Fixtures Found</h2>
+                <p>To run tests, you need to record and export test fixtures first:</p>
+                <ol>
+                    <li>Open <a href="index.html" style="color: var(--accent)">the main app</a></li>
+                    <li>Enable "Test Mode"</li>
+                    <li>Record your mantra template + 5 repetitions</li>
+                    <li>Click "Export as Test Fixtures"</li>
+                    <li>Save the file as <code>mantra-test-fixtures.json</code> in this folder</li>
+                    <li>Refresh this page</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+
+    <script src="test.js"></script>
+    <script>
+        async function runAndDisplay() {
+            const runner = new TestRunner();
+            const loaded = await runner.loadFixtures();
+
+            if (!loaded) {
+                return; // Show no-fixtures message
+            }
+
+            const container = document.getElementById('content');
+            container.innerHTML = '<div class="card"><p>Running tests...</p></div>';
+
+            // Run tests
+            const summary = await runner.runAll();
+
+            // Build results HTML
+            let html = `
+                <div class="fixture-info">
+                    Fixtures from: ${runner.fixtures.createdAt}<br>
+                    Template duration: ${runner.fixtures.template.duration.toFixed(2)}s
+                </div>
+            `;
+
+            // Test results
+            html += '<div class="card"><h3>Test Results</h3>';
+            for (const result of summary.results) {
+                const icon = result.passed ? '✓' : '✗';
+                const cls = result.passed ? 'pass' : 'fail';
+                html += `
+                    <div class="test-result ${cls}">
+                        <span class="test-name">
+                            <span class="icon ${cls}">${icon}</span>
+                            ${result.name}
+                        </span>
+                        <span class="test-details">${result.details || result.error || ''}</span>
+                    </div>
+                `;
+            }
+            html += '</div>';
+
+            // Detailed scores table with strategy breakdown
+            const template = runner.fixtures.template.envelope;
+            const reps = runner.fixtures.repetitions;
+            const templateDur = runner.fixtures.template.duration;
+
+            html += '<div class="card"><h3>Similarity Scores by Repetition</h3>';
+            html += '<p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Formula: Final = Cosine × (0.7 + 0.3 × EnergyRatio)</p>';
+            html += '<table class="scores-table"><thead><tr>';
+            html += '<th>Rep</th><th>Final Score</th><th>Cosine</th><th>Energy Ratio</th><th>Duration</th>';
+            html += '</tr></thead><tbody>';
+
+            const allScores = [];
+
+            for (const rep of reps) {
+                const result = MantraDetector.computeSimilarity(template, rep.envelope, templateDur, rep.duration);
+                const strategies = result.strategies;
+                const fillClass = result.similarity >= 0.8 ? 'high' : result.similarity >= 0.6 ? 'medium' : 'low';
+
+                allScores.push(result.similarity);
+
+                html += `<tr>
+                    <td>Rep ${rep.index}</td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <strong>${(result.similarity * 100).toFixed(0)}%</strong>
+                            <div class="score-bar" style="flex: 1; max-width: 100px;">
+                                <div class="score-fill ${fillClass}" style="width: ${result.similarity * 100}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>${(strategies.cosine * 100).toFixed(0)}%</td>
+                    <td>${(strategies.energyRatio * 100).toFixed(0)}%</td>
+                    <td>${rep.duration.toFixed(2)}s</td>
+                </tr>`;
+            }
+
+            // Add min row
+            const minScore = Math.min(...allScores);
+            html += `<tr style="border-top: 2px solid rgba(255,255,255,0.2); font-weight: bold;">
+                <td>MIN</td>
+                <td>${(minScore * 100).toFixed(0)}%</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+            </tr>`;
+
+            html += '</tbody></table>';
+
+            // Recommendation
+            const recommendedThreshold = Math.max(50, Math.floor(minScore * 100) - 5);
+            html += `<p style="margin-top: 1rem; color: var(--text-muted);">
+                <strong>Min score:</strong> ${(minScore * 100).toFixed(0)}%
+                <br><strong>Recommended threshold:</strong> ${recommendedThreshold}%
+            </p>`;
+
+            html += '</div>';
+
+            // Summary
+            const allPassed = summary.passed === summary.total;
+            html += `
+                <div class="summary ${allPassed ? 'pass' : 'fail'}">
+                    ${allPassed ? '✓ All Tests Passed' : `✗ ${summary.passed}/${summary.total} Tests Passed`}
+                </div>
+                <div style="text-align: center; margin-top: 1rem;">
+                    <button onclick="location.reload()">Run Tests Again</button>
+                </div>
+            `;
+
+            container.innerHTML = html;
+        }
+
+        runAndDisplay();
+    </script>
+</body>
+</html>
+

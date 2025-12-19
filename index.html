@@ -52,10 +52,10 @@
 
             <!-- Recording Controls -->
             <section class="recording-section">
-                <div class="status" id="status">Ready to record mantra template</div>
+                <div class="status" id="status">Ready - Click Start to begin</div>
 
                 <div class="main-control">
-                    <button id="main-action-btn" class="btn-record">Record</button>
+                    <button id="main-action-btn" class="btn-record">Start</button>
                 </div>
 
                 <div class="secondary-controls">
@@ -69,6 +69,21 @@
                 <canvas id="waveform"></canvas>
             </section>
 
+            <!-- Detection Mode -->
+            <section class="mode-section">
+                <label for="detection-mode">Detection Mode</label>
+                <div class="mode-controls">
+                    <select id="detection-mode" class="mode-select">
+                        <option value="energy">Energy/Breath (simple)</option>
+                        <option value="pattern">Pattern Matching (advanced)</option>
+                    </select>
+                </div>
+                <p class="mode-description">
+                    <strong>Energy/Breath:</strong> Counts when you pause/breathe between sustained sounds. Best for slow chants like "Ohm".<br>
+                    <strong>Pattern Matching:</strong> Records a template and matches similar sounds. Best for specific mantras.
+                </p>
+            </section>
+
             <!-- Debug/Tuning -->
             <section class="tuning-section">
                 <details>
@@ -79,28 +94,32 @@
                                 Mic Sensitivity: <span id="sensitivity-value">1.0</span>x
                                 <input type="range" id="sensitivity-slider" min="0.5" max="3.0" step="0.1" value="1.0">
                             </label>
-                            <p class="setting-description">Boosts quiet sounds like humming. Increase if humming isn't detected. No need to re-record your template - this applies to live audio only.</p>
+                            <p class="setting-description">Boosts quiet sounds like humming. Increase if humming isn't detected.</p>
                         </div>
-                        <div class="setting-item">
-                            <label>
-                                Similarity Threshold: <span id="threshold-value">0.75</span>
-                                <input type="range" id="threshold-slider" min="0.3" max="0.95" step="0.05" value="0.75">
-                            </label>
-                            <p class="setting-description">How similar a sound must be to your template to count. Lower = more sensitive, Higher = stricter.</p>
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                Debounce Time (ms): <span id="debounce-value">3000</span>
-                                <input type="range" id="debounce-slider" min="1000" max="6000" step="100" value="3000">
-                            </label>
-                            <p class="setting-description">Minimum time between matches. Increase if you're getting double counts.</p>
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                Cooldown After Match (ms): <span id="cooldown-value">4000</span>
-                                <input type="range" id="cooldown-slider" min="2000" max="8000" step="100" value="4000">
-                            </label>
-                            <p class="setting-description">Time to ignore all detections after a match. Prevents counting during transitions.</p>
+
+                        <!-- Pattern mode specific settings -->
+                        <div id="pattern-settings" style="display: none;">
+                            <div class="setting-item">
+                                <label>
+                                    Similarity Threshold: <span id="threshold-value">0.75</span>
+                                    <input type="range" id="threshold-slider" min="0.3" max="0.95" step="0.05" value="0.75">
+                                </label>
+                                <p class="setting-description">How similar a sound must be to your template to count. Lower = more sensitive, Higher = stricter.</p>
+                            </div>
+                            <div class="setting-item">
+                                <label>
+                                    Debounce Time (ms): <span id="debounce-value">3000</span>
+                                    <input type="range" id="debounce-slider" min="1000" max="6000" step="100" value="3000">
+                                </label>
+                                <p class="setting-description">Minimum time between matches. Increase if you're getting double counts.</p>
+                            </div>
+                            <div class="setting-item">
+                                <label>
+                                    Cooldown After Match (ms): <span id="cooldown-value">4000</span>
+                                    <input type="range" id="cooldown-slider" min="2000" max="8000" step="100" value="4000">
+                                </label>
+                                <p class="setting-description">Time to ignore all detections after a match. Prevents counting during transitions.</p>
+                            </div>
                         </div>
                     </div>
                 </details>
@@ -176,6 +195,10 @@
         <div class="particles" id="particles"></div>
     </div>
 
+    <!-- Load modules in dependency order -->
+    <script src="audio-utils.js"></script>
+    <script src="detection.js"></script>
+    <script src="celebration.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 // Mantra Counter App
-// Uses Web Audio API for audio pattern matching
+// Main application logic and UI management
 
 class MantraCounter {
     constructor() {
@@ -8,7 +8,7 @@ class MantraCounter {
         this.analyser = null;
         this.mediaStream = null;
         this.sourceNode = null;
-        this.scriptProcessor = null;
+        this.gainNode = null;
 
         // State
         this.isRecordingTemplate = false;
@@ -19,26 +19,26 @@ class MantraCounter {
         this.goalReached = false;
 
         // Counter state
-        this.count = 0; // Always start at 0 on page load
-        this.goal = 33; // Default goal
+        this.count = 0;
+        this.goal = 33;
         this.lastMatchTime = 0;
 
-        // Settings
-        this.similarityThreshold = 0.75; // 75% - works well with cosine + energy weighting
-        this.debounceTime = 3000; // ms - increased to prevent double counting
-        this.matchCooldown = 4000; // ms - ignore all detections for this long after a match
-        this.micSensitivity = 1.0; // Gain multiplier for mic input
-        this.gainNode = null; // Audio gain node
+        // Detection mode: 'energy' or 'pattern'
+        this.detectionMode = 'energy';
+
+        // Settings (for pattern mode)
+        this.similarityThreshold = 0.75;
+        this.debounceTime = 3000;
+        this.matchCooldown = 4000;
+        this.micSensitivity = 1.0;
 
         // Recording buffers
-        this.recordingChunks = [];
         this.audioBuffer = [];
 
         // Test mode
         this.testMode = false;
-        this.testPhase = null; // 'template' | 'repetition'
         this.testRepetitions = [];
-        this.testRepetitionCount = 0;
+        this.testRepEnvelopes = [];
 
         // DOM elements
         this.elements = {};
@@ -56,6 +56,7 @@ class MantraCounter {
         this.bindEvents();
         this.loadState();
         this.setupCanvas();
+        this.updateModeUI();
     }
 
     cacheElements() {
@@ -72,6 +73,8 @@ class MantraCounter {
             resetMantraBtn: document.getElementById('reset-mantra-btn'),
             manualIncrementBtn: document.getElementById('manual-increment-btn'),
             waveform: document.getElementById('waveform'),
+            detectionModeSelect: document.getElementById('detection-mode'),
+            patternSettings: document.getElementById('pattern-settings'),
             testModeToggle: document.getElementById('test-mode-toggle'),
             testControls: document.querySelector('.test-controls'),
             runTestBtn: document.getElementById('run-test-btn'),
@@ -85,15 +88,12 @@ class MantraCounter {
             matchLog: document.getElementById('match-log')
         };
 
-        // Button state tracking
-        // Since we use energy-based detection, we can start listening without a template
-        this.buttonState = 'listening'; // 'record' | 'confirm' | 'listening' | 'stop'
+        // Button state: energy mode starts ready, pattern mode needs recording
+        this.buttonState = this.detectionMode === 'energy' ? 'listening' : 'record';
 
-        // Initialize button state
         if (this.templateEnvelope) {
             this.elements.resetMantraBtn.style.display = 'inline-block';
         }
-        // Show reset counter button if count > 0 (though it should always be 0 on load now)
         if (this.count > 0) {
             this.elements.resetCounterBtn.style.display = 'inline-block';
         }
@@ -107,22 +107,41 @@ class MantraCounter {
         this.elements.resetMantraBtn.addEventListener('click', () => this.resetMantra());
         this.elements.manualIncrementBtn.addEventListener('click', () => this.manualIncrement());
 
-        this.elements.testModeToggle.addEventListener('change', (e) => {
-            this.testMode = e.target.checked;
-            this.elements.testControls.style.display = this.testMode ? 'block' : 'none';
-        });
+        // Detection mode toggle
+        if (this.elements.detectionModeSelect) {
+            this.elements.detectionModeSelect.addEventListener('change', (e) => {
+                this.detectionMode = e.target.value;
+                this.updateModeUI();
+                this.saveState();
+            });
+        }
 
-        this.elements.runTestBtn.addEventListener('click', () => this.runTest());
+        if (this.elements.testModeToggle) {
+            this.elements.testModeToggle.addEventListener('change', (e) => {
+                this.testMode = e.target.checked;
+                if (this.elements.testControls) {
+                    this.elements.testControls.style.display = this.testMode ? 'block' : 'none';
+                }
+            });
+        }
 
-        this.elements.thresholdSlider.addEventListener('input', (e) => {
-            this.similarityThreshold = parseFloat(e.target.value);
-            this.elements.thresholdValue.textContent = this.similarityThreshold.toFixed(2);
-        });
+        if (this.elements.runTestBtn) {
+            this.elements.runTestBtn.addEventListener('click', () => this.runTest());
+        }
 
-        this.elements.debounceSlider.addEventListener('input', (e) => {
-            this.debounceTime = parseInt(e.target.value);
-            this.elements.debounceValue.textContent = this.debounceTime;
-        });
+        if (this.elements.thresholdSlider) {
+            this.elements.thresholdSlider.addEventListener('input', (e) => {
+                this.similarityThreshold = parseFloat(e.target.value);
+                this.elements.thresholdValue.textContent = this.similarityThreshold.toFixed(2);
+            });
+        }
+
+        if (this.elements.debounceSlider) {
+            this.elements.debounceSlider.addEventListener('input', (e) => {
+                this.debounceTime = parseInt(e.target.value);
+                this.elements.debounceValue.textContent = this.debounceTime;
+            });
+        }
 
         const cooldownSlider = document.getElementById('cooldown-slider');
         const cooldownValue = document.getElementById('cooldown-value');
@@ -137,28 +156,49 @@ class MantraCounter {
             this.elements.sensitivitySlider.addEventListener('input', (e) => {
                 this.micSensitivity = parseFloat(e.target.value);
                 this.elements.sensitivityValue.textContent = this.micSensitivity.toFixed(1);
-                // Update gain node if it exists
                 if (this.gainNode) {
                     this.gainNode.gain.value = this.micSensitivity;
                 }
             });
         }
 
-        // Enter key for goal input
         this.elements.goalInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.setGoal();
         });
     }
 
+    updateModeUI() {
+        // Show/hide pattern-specific settings
+        if (this.elements.patternSettings) {
+            this.elements.patternSettings.style.display =
+                this.detectionMode === 'pattern' ? 'block' : 'none';
+        }
+
+        // Update button state based on mode
+        if (this.detectionMode === 'energy') {
+            this.buttonState = 'listening';
+            this.elements.resetMantraBtn.style.display = 'none';
+            this.setStatus('Ready - Click Start to begin energy-based detection');
+        } else {
+            if (this.templateEnvelope) {
+                this.buttonState = 'listening';
+                this.elements.resetMantraBtn.style.display = 'inline-block';
+                this.setStatus('Template ready - Click Start to begin pattern matching');
+            } else {
+                this.buttonState = 'record';
+                this.elements.resetMantraBtn.style.display = 'none';
+                this.setStatus('Record your mantra template first');
+            }
+        }
+        this.updateMainButton();
+    }
+
     setupCanvas() {
         this.waveformCanvas = this.elements.waveform;
+        if (!this.waveformCanvas) return;
         this.waveformCtx = this.waveformCanvas.getContext('2d');
         this.resizeCanvas();
-
-        // Re-resize on window resize
-        window.addEventListener('resize', () => {
-            this.resizeCanvas();
-        });
+        window.addEventListener('resize', () => this.resizeCanvas());
     }
 
     resizeCanvas() {
@@ -168,46 +208,41 @@ class MantraCounter {
         this.waveformCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
     }
 
-    // State persistence
     loadState() {
         const saved = localStorage.getItem('mantraCounter');
         if (saved) {
             const state = JSON.parse(saved);
-            // Only load goal, not count (count always starts at 0)
             this.goal = state.goal || 33;
+            this.detectionMode = state.detectionMode || 'energy';
         }
-        // Update input field with loaded goal
         this.elements.goalInput.value = this.goal;
+        if (this.elements.detectionModeSelect) {
+            this.elements.detectionModeSelect.value = this.detectionMode;
+        }
         this.updateDisplay();
     }
 
     saveState() {
-        // Only save goal, not count (count resets on reload)
         localStorage.setItem('mantraCounter', JSON.stringify({
-            goal: this.goal
+            goal: this.goal,
+            detectionMode: this.detectionMode
         }));
     }
 
-    // Goal management
     setGoal() {
         const newGoal = parseInt(this.elements.goalInput.value) || 33;
         this.goal = Math.max(1, newGoal);
         this.elements.goalInput.value = this.goal;
-
-        // Reset goal reached flag if count is below new goal
         if (this.count < this.goal) {
             this.goalReached = false;
         }
-
         this.updateDisplay();
         this.saveState();
     }
 
-    // Display updates
     updateDisplay() {
         this.elements.currentCount.textContent = this.count;
         this.elements.goalDisplay.textContent = this.goal;
-
         const percent = Math.min(100, (this.count / this.goal) * 100);
         this.elements.progressBar.style.width = `${percent}%`;
         this.elements.progressPercent.textContent = `${Math.round(percent)}%`;
@@ -228,27 +263,16 @@ class MantraCounter {
             <span class="score ${score < 0.8 ? 'low' : ''}">${(score * 100).toFixed(1)}%</span>
         `;
         this.elements.matchLog.insertBefore(entry, this.elements.matchLog.firstChild);
-
-        // Keep only last 50 entries
         while (this.elements.matchLog.children.length > 50) {
             this.elements.matchLog.removeChild(this.elements.matchLog.lastChild);
         }
     }
 
-    // Detect if we're on a mobile device
-    isMobileDevice() {
-        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-               (window.innerWidth <= 768 && 'ontouchstart' in window);
-    }
-
-    // Audio initialization
     async initAudio() {
         if (this.audioContext) {
-            // Resume audio context if suspended (required for iOS)
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
-            // Update gain if already initialized
             if (this.gainNode) {
                 this.gainNode.gain.value = this.micSensitivity;
             }
@@ -258,18 +282,14 @@ class MantraCounter {
         try {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Mobile devices often ignore audio constraints, so we make them optional
-            const isMobile = this.isMobileDevice();
+            const isMobile = AudioUtils.isMobileDevice();
             const audioConstraints = isMobile ? {
-                // On mobile, let the browser use its defaults (often better for mobile mics)
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true,
-                // But try to get high quality
                 sampleRate: 48000,
                 channelCount: 1
             } : {
-                // On desktop, disable processing for raw audio
                 echoCancellation: false,
                 noiseSuppression: false,
                 autoGainControl: false
@@ -279,37 +299,22 @@ class MantraCounter {
                 audio: audioConstraints
             });
 
-            // Resume audio context (required for iOS)
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
 
             this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
-
-            // Add gain node for sensitivity control
             this.gainNode = this.audioContext.createGain();
             this.gainNode.gain.value = this.micSensitivity;
 
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 2048;
-            this.analyser.smoothingTimeConstant = isMobile ? 0.5 : 0.3; // More smoothing on mobile
+            this.analyser.smoothingTimeConstant = isMobile ? 0.5 : 0.3;
 
-            // Connect: source -> gain -> analyser
             this.sourceNode.connect(this.gainNode);
             this.gainNode.connect(this.analyser);
 
-            console.log('Audio initialized successfully', {
-                isMobile,
-                sampleRate: this.audioContext.sampleRate,
-                state: this.audioContext.state,
-                constraints: audioConstraints
-            });
-
-            // Show helpful message for mobile users
-            if (isMobile) {
-                console.log('Mobile device detected - using mobile-optimized audio settings');
-                console.log('Tip: If detection is not working well, try adjusting the Mic Sensitivity slider');
-            }
+            console.log('Audio initialized', { isMobile, sampleRate: this.audioContext.sampleRate });
         } catch (err) {
             console.error('Error initializing audio:', err);
             this.setStatus('Error: Could not access microphone');
@@ -317,7 +322,6 @@ class MantraCounter {
         }
     }
 
-    // Main action button handler
     handleMainAction() {
         switch (this.buttonState) {
             case 'record':
@@ -361,14 +365,10 @@ class MantraCounter {
         }
     }
 
-    // Template recording
     async startRecordingTemplate() {
         await this.initAudio();
-
-        // Ensure audio context is running (required for iOS)
         if (this.audioContext && this.audioContext.state === 'suspended') {
             await this.audioContext.resume();
-            console.log('Audio context resumed for recording');
         }
 
         this.isRecordingTemplate = true;
@@ -379,7 +379,6 @@ class MantraCounter {
         this.elements.resetMantraBtn.style.display = 'none';
         this.setStatus('Recording mantra... Click to confirm when done', 'recording');
 
-        // Start capturing audio samples
         this.startCapturing();
         this.startVisualization();
     }
@@ -390,14 +389,10 @@ class MantraCounter {
 
         const capture = () => {
             if (!this.isRecordingTemplate && !this.isListening) return;
-
             this.analyser.getFloatTimeDomainData(dataArray);
-
             if (this.isRecordingTemplate) {
-                // Store samples for template
                 this.audioBuffer.push(...dataArray);
             }
-
             requestAnimationFrame(capture);
         };
 
@@ -412,358 +407,86 @@ class MantraCounter {
 
         this.isRecordingTemplate = false;
 
-        // Process and trim the recorded template
         const rawBuffer = new Float32Array(this.audioBuffer);
-        const trimmed = this.trimSilence(rawBuffer);
+        const trimmed = AudioUtils.trimSilence(rawBuffer, this.audioContext.sampleRate);
 
         this.templateBuffer = trimmed.data;
-        this.templateEnvelope = this.extractEnvelope(this.templateBuffer);
+        this.templateEnvelope = AudioUtils.extractEnvelope(this.templateBuffer);
         this.templateDuration = trimmed.trimmedDuration;
 
-        console.log(`Template recorded: ${trimmed.originalDuration.toFixed(2)}s → ${trimmed.trimmedDuration.toFixed(2)}s (trimmed)`);
-        console.log('Template envelope length:', this.templateEnvelope.length);
+        console.log(`Template: ${trimmed.originalDuration.toFixed(2)}s → ${trimmed.trimmedDuration.toFixed(2)}s`);
 
-        // Update UI
         this.buttonState = 'listening';
         this.updateMainButton();
         this.elements.resetMantraBtn.style.display = 'inline-block';
         this.elements.resetCounterBtn.style.display = 'inline-block';
 
-        this.setStatus(`Mantra saved: ${this.templateDuration.toFixed(1)}s. Click to start listening.`);
+        this.setStatus(`Mantra saved: ${this.templateDuration.toFixed(1)}s. Click Start to begin.`);
         this.stopVisualization();
     }
 
-    // Trim silence from start and end of audio buffer
-    trimSilence(audioData, threshold = 0.02) {
-        const windowSize = 1024;
-        const rmsValues = [];
-
-        // Calculate RMS for each window
-        for (let i = 0; i < audioData.length; i += windowSize) {
-            const slice = audioData.slice(i, Math.min(i + windowSize, audioData.length));
-            const rms = Math.sqrt(slice.reduce((sum, x) => sum + x * x, 0) / slice.length);
-            rmsValues.push({ index: i, rms });
-        }
-
-        // Find first and last windows above threshold
-        let startIndex = 0;
-        let endIndex = audioData.length;
-
-        for (let i = 0; i < rmsValues.length; i++) {
-            if (rmsValues[i].rms > threshold) {
-                startIndex = Math.max(0, rmsValues[i].index - windowSize); // Include a bit before
-                break;
-            }
-        }
-
-        for (let i = rmsValues.length - 1; i >= 0; i--) {
-            if (rmsValues[i].rms > threshold) {
-                endIndex = Math.min(audioData.length, rmsValues[i].index + windowSize * 2); // Include a bit after
-                break;
-            }
-        }
-
-        const trimmed = audioData.slice(startIndex, endIndex);
-        const trimmedDuration = trimmed.length / this.audioContext.sampleRate;
-        const originalDuration = audioData.length / this.audioContext.sampleRate;
-
-        console.log(`Trimmed: ${originalDuration.toFixed(1)}s → ${trimmedDuration.toFixed(1)}s (removed ${(originalDuration - trimmedDuration).toFixed(1)}s silence)`);
-
-        return {
-            data: trimmed,
-            originalDuration,
-            trimmedDuration,
-            silenceRemoved: originalDuration - trimmedDuration
-        };
-    }
-
-    // Envelope extraction - extracts amplitude envelope from audio
-    extractEnvelope(audioData, windowSize = 1024) {
-        const envelope = [];
-        for (let i = 0; i < audioData.length; i += windowSize) {
-            const slice = audioData.slice(i, Math.min(i + windowSize, audioData.length));
-            // RMS (root mean square) for energy
-            const rms = Math.sqrt(slice.reduce((sum, x) => sum + x * x, 0) / slice.length);
-            envelope.push(rms);
-        }
-        return new Float32Array(envelope);
-    }
-
-    // Normalize array to 0-1 range
-    normalize(arr) {
-        const max = Math.max(...arr);
-        const min = Math.min(...arr);
-        const range = max - min;
-        if (range === 0) return arr.map(() => 0);
-        return arr.map(x => (x - min) / range);
-    }
-
-    // Resample array to target length using linear interpolation
-    resample(arr, targetLength) {
-        if (arr.length === targetLength) return arr;
-        const result = new Array(targetLength);
-        const ratio = (arr.length - 1) / (targetLength - 1);
-
-        for (let i = 0; i < targetLength; i++) {
-            const srcIdx = i * ratio;
-            const lower = Math.floor(srcIdx);
-            const upper = Math.min(Math.ceil(srcIdx), arr.length - 1);
-            const frac = srcIdx - lower;
-            result[i] = arr[lower] * (1 - frac) + arr[upper] * frac;
-        }
-        return result;
-    }
-
-    // Shape similarity (normalized envelope comparison at fixed length)
-    shapeSimilarity(envelope1, envelope2) {
-        const fixedLen = 50;
-        const shape1 = this.normalize(this.resample(Array.from(envelope1), fixedLen));
-        const shape2 = this.normalize(this.resample(Array.from(envelope2), fixedLen));
-
-        let totalDiff = 0;
-        for (let i = 0; i < fixedLen; i++) {
-            totalDiff += Math.abs(shape1[i] - shape2[i]);
-        }
-        const avgDiff = totalDiff / fixedLen;
-        return Math.max(0, 1 - avgDiff);
-    }
-
-    // Cosine similarity on resampled envelopes
-    cosineSimilarity(envelope1, envelope2) {
-        const targetLen = 50;
-        const a = this.resample(Array.from(envelope1), targetLen);
-        const b = this.resample(Array.from(envelope2), targetLen);
-
-        let dotProduct = 0, normA = 0, normB = 0;
-        for (let i = 0; i < targetLen; i++) {
-            dotProduct += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        const denom = Math.sqrt(normA) * Math.sqrt(normB);
-        return denom === 0 ? 0 : dotProduct / denom;
-    }
-
-    // Correlation with resampling (stretch to match lengths)
-    correlationResampled(envelope1, envelope2) {
-        const targetLen = Math.max(envelope1.length, envelope2.length);
-        const norm1 = this.normalize(this.resample(Array.from(envelope1), targetLen));
-        const norm2 = this.normalize(this.resample(Array.from(envelope2), targetLen));
-
-        if (targetLen < 3) return 0;
-
-        const meanA = norm1.reduce((s, x) => s + x, 0) / targetLen;
-        const meanB = norm2.reduce((s, x) => s + x, 0) / targetLen;
-
-        let numerator = 0, denomA = 0, denomB = 0;
-        for (let i = 0; i < targetLen; i++) {
-            const diffA = norm1[i] - meanA;
-            const diffB = norm2[i] - meanB;
-            numerator += diffA * diffB;
-            denomA += diffA * diffA;
-            denomB += diffB * diffB;
-        }
-
-        const denom = Math.sqrt(denomA * denomB);
-        return denom === 0 ? 0 : numerator / denom;
-    }
-
-    // Combined similarity using multiple strategies
-    computeSimilarity(envelope1, envelope2, returnDiagnostics = false) {
-        const len1 = envelope1.length;
-        const len2 = envelope2.length;
-        const durationRatio = Math.min(len1, len2) / Math.max(len1, len2);
-
-        if (len1 < 3 || len2 < 3) {
-            if (returnDiagnostics) {
-                return { similarity: 0, diagnostics: { error: 'Audio too short' } };
-            }
-            return 0;
-        }
-
-        // Compute multiple strategies
-        const resampled = this.correlationResampled(envelope1, envelope2);
-        const shape = this.shapeSimilarity(envelope1, envelope2);
-        const cosine = this.cosineSimilarity(envelope1, envelope2);
-
-        // Energy check - compare average energy levels
-        const energy1 = envelope1.reduce((s, x) => s + x, 0) / len1;
-        const energy2 = envelope2.reduce((s, x) => s + x, 0) / len2;
-        const energyRatio = Math.min(energy1, energy2) / Math.max(energy1, energy2 || 0.001);
-
-        // Use cosine as primary, with energy gating to filter noise
-        // If energy ratio is very low (< 30%), it's likely background noise, not a real mantra
-        // On mobile, be slightly more lenient with energy gating due to different mic characteristics
-        const isMobile = this.isMobileDevice();
-        const energyGateThreshold = isMobile ? 0.25 : 0.3;
-        let similarity;
-        if (energyRatio < energyGateThreshold) {
-            similarity = energyRatio; // Return very low score for noise
-        } else {
-            similarity = cosine * (0.7 + 0.3 * energyRatio);
-        }
-
-        if (returnDiagnostics) {
-            return {
-                similarity,
-                diagnostics: {
-                    resampled,
-                    shape,
-                    cosine,
-                    energyRatio,
-                    durationRatio,
-                    templateLength: len1,
-                    sampleLength: len2
-                }
-            };
-        }
-
-        return similarity;
-    }
-
-    // Listening mode
     async startListening() {
         await this.initAudio();
-
-        // Ensure audio context is running (required for iOS)
         if (this.audioContext && this.audioContext.state === 'suspended') {
             await this.audioContext.resume();
-            console.log('Audio context resumed for listening');
         }
 
         this.isListening = true;
         this.buttonState = 'stop';
         this.updateMainButton();
-        this.setStatus('Listening for chants (energy-based detection)...', 'listening');
+
+        const modeName = this.detectionMode === 'energy' ? 'energy/breath' : 'pattern matching';
+        this.setStatus(`Listening (${modeName})...`, 'listening');
 
         this.startVisualization();
-        this.startDetection();
-    }
 
-    startDetection() {
-        const bufferLength = this.analyser.fftSize;
-        const dataArray = new Float32Array(bufferLength);
-
-        // Simple energy-based state machine for slow chants like "Ohhhhmmm"
-        // The chant has transitions (ooo -> uuu -> mmm) that aren't silence
-        // True silence is a deep breath between chants
-        let state = 'waiting';
-
-        // Energy thresholds - three levels to distinguish chanting from transitions from silence
-        const isMobile = this.isMobileDevice();
-        const loudThreshold = isMobile ? 0.008 : 0.012; // Active chanting (any part of "Ohm")
-        const transitionThreshold = isMobile ? 0.002 : 0.003; // Soft sounds (transitions, quiet "mmm")
-        const silenceThreshold = isMobile ? 0.0008 : 0.001; // True silence (deep breath)
-
-        // Timing - designed for slow chants
-        const minChantDuration = 500; // Minimum ms of sound to count as a real chant
-        const minSilenceDuration = 600; // Need sustained silence (deep breath) - not just a brief pause
-        const debounceTime = 800; // Minimum ms between counts
-
-        let chantStartTime = 0;
-        let silenceStartTime = 0;
-        let lastCountTime = 0;
-        let hasHadLoudSound = false; // Track if we've had actual loud chanting
-
-        const detect = () => {
-            if (!this.isListening) return;
-
-            this.analyser.getFloatTimeDomainData(dataArray);
-
-            // Calculate current RMS energy
-            const rms = Math.sqrt(dataArray.reduce((sum, x) => sum + x * x, 0) / dataArray.length);
-            const now = Date.now();
-
-            // Skip if in cooldown
-            if (now - lastCountTime < debounceTime) {
-                requestAnimationFrame(detect);
+        // Start the appropriate detection mode
+        if (this.detectionMode === 'energy') {
+            Detection.startEnergyDetection(
+                this.analyser,
+                (score) => this.onMatch(score),
+                () => this.isListening
+            );
+        } else {
+            if (!this.templateEnvelope) {
+                this.setStatus('No template recorded. Record one first.');
+                this.stopListening();
                 return;
             }
-
-            // State machine logic
-            if (state === 'waiting') {
-                // Waiting for a chant to start
-                if (rms > loudThreshold) {
-                    // Loud chanting detected - start tracking
-                    state = 'chanting';
-                    chantStartTime = now;
-                    silenceStartTime = 0;
-                    hasHadLoudSound = true;
-                    console.log(`Chant started (rms: ${rms.toFixed(4)})`);
-                }
-            } else if (state === 'chanting') {
-                // We're in a chant, looking for true silence (deep breath)
-
-                if (rms > loudThreshold) {
-                    // Active loud chanting - reset silence timer, still in chant
-                    silenceStartTime = 0;
-                    hasHadLoudSound = true;
-                } else if (rms > transitionThreshold) {
-                    // Soft sound - could be "mmm" ending or transition
-                    // This is NOT silence, just a quieter part of the chant
-                    // Reset silence timer but stay in chanting state
-                    silenceStartTime = 0;
-                } else if (rms > silenceThreshold) {
-                    // Very quiet - might be starting silence, but wait to confirm
-                    if (silenceStartTime === 0) {
-                        silenceStartTime = now;
-                    }
-                    // Don't count yet - need sustained true silence
-                } else {
-                    // True silence (deep breath territory)
-                    if (silenceStartTime === 0) {
-                        silenceStartTime = now;
-                    }
-
-                    const silenceDuration = now - silenceStartTime;
-                    const chantDuration = silenceStartTime > 0 ? silenceStartTime - chantStartTime : now - chantStartTime;
-
-                    // Count if: sustained silence + actual chant happened + had loud sound
-                    if (silenceDuration >= minSilenceDuration &&
-                        chantDuration >= minChantDuration &&
-                        hasHadLoudSound) {
-                        console.log(`Chant completed (${chantDuration.toFixed(0)}ms chant, ${silenceDuration.toFixed(0)}ms silence)`);
-                        this.onMatch(1.0);
-                        lastCountTime = now;
-                        state = 'waiting';
-                        chantStartTime = 0;
-                        silenceStartTime = 0;
-                        hasHadLoudSound = false;
-                    }
-                }
-            }
-
-            requestAnimationFrame(detect);
-        };
-
-        detect();
+            Detection.startPatternDetection(
+                this.analyser,
+                this.templateEnvelope,
+                this.templateBuffer,
+                {
+                    similarityThreshold: this.similarityThreshold,
+                    debounceTime: this.debounceTime,
+                    matchCooldown: this.matchCooldown
+                },
+                (score) => this.onMatch(score),
+                () => this.isListening
+            );
+        }
     }
 
     onMatch(score) {
         this.count++;
         this.updateDisplay();
-        // Don't save count (it resets on reload)
         this.logMatch(score);
 
-        // Show reset counter button if count > 0
         if (this.count > 0) {
             this.elements.resetCounterBtn.style.display = 'inline-block';
         }
 
         console.log(`Count: ${this.count}`);
 
-        // Visual feedback
         this.elements.currentCount.style.transform = 'scale(1.2)';
         setTimeout(() => {
             this.elements.currentCount.style.transform = 'scale(1)';
         }, 200);
 
-        // Check if goal reached
         if (this.count >= this.goal && !this.goalReached) {
             this.goalReached = true;
             this.setStatus(`Goal reached! ${this.count}/${this.goal}`, 'listening');
-            // Wait for silence before celebrating
             this.waitForSilenceThenCelebrate();
         }
     }
@@ -775,13 +498,11 @@ class MantraCounter {
         this.setStatus('Listening stopped');
         this.stopVisualization();
 
-        // Stop media stream to turn off mic
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => track.stop());
             this.mediaStream = null;
         }
 
-        // Clean up audio context
         if (this.audioContext && this.audioContext.state !== 'closed') {
             this.audioContext.close().catch(console.error);
             this.audioContext = null;
@@ -795,7 +516,6 @@ class MantraCounter {
         this.count = 0;
         this.goalReached = false;
         this.updateDisplay();
-        // Hide reset button when count is 0
         this.elements.resetCounterBtn.style.display = 'none';
         this.setStatus('Counter reset');
     }
@@ -803,24 +523,21 @@ class MantraCounter {
     manualIncrement() {
         this.count++;
         this.updateDisplay();
-        this.logMatch(1.0); // Log as 100% match for manual increments
+        this.logMatch(1.0);
 
-        // Show reset counter button if count > 0
         if (this.count > 0) {
             this.elements.resetCounterBtn.style.display = 'inline-block';
         }
 
-        // Visual feedback
         this.elements.currentCount.style.transform = 'scale(1.2)';
         setTimeout(() => {
             this.elements.currentCount.style.transform = 'scale(1)';
         }, 200);
 
-        // Check if goal reached
         if (this.count >= this.goal && !this.goalReached) {
             this.goalReached = true;
             this.setStatus(`Goal reached! ${this.count}/${this.goal}`, 'listening');
-            this.celebrateCompletion(true); // true = keep visible (no auto-hide)
+            Celebration.showOverlay(this.count, this.audioContext, true);
         }
     }
 
@@ -841,10 +558,9 @@ class MantraCounter {
         }
     }
 
-    // Visualization
     startVisualization() {
-        // Ensure canvas is properly sized
         this.resizeCanvas();
+        if (!this.analyser) return;
 
         const bufferLength = this.analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
@@ -856,7 +572,6 @@ class MantraCounter {
             }
 
             this.animationId = requestAnimationFrame(draw);
-
             this.analyser.getByteTimeDomainData(dataArray);
 
             const width = this.waveformCanvas.offsetWidth;
@@ -875,13 +590,11 @@ class MantraCounter {
             for (let i = 0; i < bufferLength; i++) {
                 const v = dataArray[i] / 128.0;
                 const y = (v * height) / 2;
-
                 if (i === 0) {
                     this.waveformCtx.moveTo(x, y);
                 } else {
                     this.waveformCtx.lineTo(x, y);
                 }
-
                 x += sliceWidth;
             }
 
@@ -901,18 +614,54 @@ class MantraCounter {
     }
 
     clearCanvas() {
+        if (!this.waveformCanvas || !this.waveformCtx) return;
         const width = this.waveformCanvas.offsetWidth;
         const height = this.waveformCanvas.offsetHeight;
         this.waveformCtx.fillStyle = 'rgba(0, 0, 0, 0.3)';
         this.waveformCtx.fillRect(0, 0, width, height);
     }
 
-    // Test mode - interactive button-driven recording
+    waitForSilenceThenCelebrate() {
+        if (!this.analyser) {
+            Celebration.showOverlay(this.count, this.audioContext, false, () => this.stopListening());
+            return;
+        }
+
+        const bufferLength = this.analyser.fftSize;
+        const dataArray = new Float32Array(bufferLength);
+        const silenceThreshold = 0.01;
+        let silenceFrames = 0;
+        const requiredSilenceFrames = 60;
+
+        const checkSilence = () => {
+            if (!this.isListening) {
+                Celebration.showOverlay(this.count, this.audioContext, false, () => this.stopListening());
+                return;
+            }
+
+            this.analyser.getFloatTimeDomainData(dataArray);
+            const rms = Math.sqrt(dataArray.reduce((sum, x) => sum + x * x, 0) / dataArray.length);
+
+            if (rms < silenceThreshold) {
+                silenceFrames++;
+                if (silenceFrames >= requiredSilenceFrames) {
+                    Celebration.showOverlay(this.count, this.audioContext, false, () => this.stopListening());
+                    return;
+                }
+            } else {
+                silenceFrames = 0;
+            }
+
+            requestAnimationFrame(checkSilence);
+        };
+
+        checkSilence();
+    }
+
+    // Test mode methods
     async runTest() {
         this.testRepetitions = [];
-        this.testRepEnvelopes = []; // Store envelopes for export
-        this.testCurrentRep = 0;
-        this.testResolve = null;
+        this.testRepEnvelopes = [];
 
         await this.initAudio();
 
@@ -930,14 +679,12 @@ class MantraCounter {
         const stopBtn = document.getElementById('test-stop-btn');
         const statusDiv = document.getElementById('test-status');
 
-        // Phase 1: Record template
         await this.recordTestPhase(recordBtn, stopBtn, statusDiv, 'template');
 
-        // Trim silence from template
         const templateRaw = new Float32Array(this.audioBuffer);
-        const templateTrimmed = this.trimSilence(templateRaw);
+        const templateTrimmed = AudioUtils.trimSilence(templateRaw, this.audioContext.sampleRate);
         this.templateBuffer = templateTrimmed.data;
-        this.templateEnvelope = this.extractEnvelope(this.templateBuffer);
+        this.templateEnvelope = AudioUtils.extractEnvelope(this.templateBuffer);
         this.templateDuration = templateTrimmed.trimmedDuration;
 
         statusDiv.innerHTML = `
@@ -947,23 +694,19 @@ class MantraCounter {
             </div>
         `;
 
-        // Phase 2: Record 5 repetitions
         for (let i = 0; i < 5; i++) {
             this.elements.testResults.querySelector('.test-instructions p').innerHTML =
                 `<strong>Step ${i + 2}:</strong> Record repetition ${i + 1} of 5`;
 
             await this.recordTestPhase(recordBtn, stopBtn, statusDiv, 'repetition', i);
 
-            // Trim silence from repetition
             const repRaw = new Float32Array(this.audioBuffer);
-            const repTrimmed = this.trimSilence(repRaw);
-            const repEnvelope = this.extractEnvelope(repTrimmed.data);
+            const repTrimmed = AudioUtils.trimSilence(repRaw, this.audioContext.sampleRate);
+            const repEnvelope = AudioUtils.extractEnvelope(repTrimmed.data);
 
-            // Store envelope for export
             this.testRepEnvelopes.push(repEnvelope);
 
-            // Get similarity with diagnostics
-            const result = this.computeSimilarity(this.templateEnvelope, repEnvelope, true);
+            const result = AudioUtils.computeSimilarity(this.templateEnvelope, repEnvelope, true);
             const similarity = result.similarity;
             const diag = result.diagnostics;
 
@@ -975,24 +718,17 @@ class MantraCounter {
             });
 
             const isPassed = similarity >= this.similarityThreshold;
-            const durationDiff = Math.abs(repTrimmed.trimmedDuration - this.templateDuration);
-            const durationWarning = durationDiff > 2 ? '⚠️ duration differs' : '';
 
             statusDiv.innerHTML += `
                 <div class="test-result ${isPassed ? 'pass' : 'fail'}">
                     <div><strong>Rep ${i + 1}:</strong> ${(similarity * 100).toFixed(1)}% ${isPassed ? '✓' : '✗'}</div>
                     <div class="test-diagnostics">
-                        Duration: ${repTrimmed.trimmedDuration.toFixed(1)}s (template: ${this.templateDuration.toFixed(1)}s) ${durationWarning}<br>
-                        Duration match: ${(diag.durationRatio * 100).toFixed(0)}% |
-                        Energy match: ${(diag.energyRatio * 100).toFixed(0)}%
+                        Duration: ${repTrimmed.trimmedDuration.toFixed(1)}s (template: ${this.templateDuration.toFixed(1)}s)
                     </div>
                 </div>
             `;
-
-            console.log(`Repetition ${i + 1}:`, diag);
         }
 
-        // Phase 3: Show final results
         this.analyzeTestResults();
     }
 
@@ -1005,7 +741,6 @@ class MantraCounter {
                 this.isRecordingTemplate = true;
                 this.startCapturing();
                 this.startVisualization();
-
                 recordBtn.disabled = true;
                 stopBtn.disabled = false;
                 recordBtn.textContent = 'Recording...';
@@ -1014,15 +749,11 @@ class MantraCounter {
             const stopRecording = () => {
                 this.isRecordingTemplate = false;
                 this.stopVisualization();
-
                 recordBtn.disabled = false;
                 stopBtn.disabled = true;
                 recordBtn.textContent = 'Start Recording';
-
-                // Clean up listeners
                 recordBtn.removeEventListener('click', startRecording);
                 stopBtn.removeEventListener('click', stopRecording);
-
                 resolve();
             };
 
@@ -1039,12 +770,12 @@ class MantraCounter {
             <div style="margin-top: 1rem; font-weight: bold;">
                 <div>Passed: ${passed}/5 (threshold: ${(this.similarityThreshold * 100).toFixed(0)}%)</div>
                 <div style="color: ${passed >= 4 ? '#4ade80' : '#ef4444'}; margin-top: 0.5rem;">
-                    ${passed >= 4 ? '✓ Test PASSED - Detection is working!' : '✗ Test FAILED - Try adjusting threshold or re-record'}
+                    ${passed >= 4 ? '✓ Test PASSED' : '✗ Test FAILED - Try adjusting threshold'}
                 </div>
             </div>
             <div style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
                 <button id="test-again-btn" class="btn-secondary">Run Test Again</button>
-                <button id="export-fixtures-btn" class="btn-primary">Export as Test Fixtures</button>
+                <button id="export-fixtures-btn" class="btn-primary">Export Fixtures</button>
             </div>
         `;
 
@@ -1053,13 +784,11 @@ class MantraCounter {
     }
 
     exportTestFixtures() {
-        // Convert Float32Arrays to regular arrays for JSON serialization
         const fixtures = {
             version: 1,
             sampleRate: this.audioContext.sampleRate,
             createdAt: new Date().toISOString(),
             template: {
-                // Store envelope (much smaller than raw audio)
                 envelope: Array.from(this.templateEnvelope),
                 duration: this.templateDuration
             },
@@ -1067,11 +796,10 @@ class MantraCounter {
                 index: rep.index,
                 envelope: Array.from(this.testRepEnvelopes[i]),
                 duration: rep.duration,
-                expectedMatch: true // All reps should match the template
+                expectedMatch: true
             }))
         };
 
-        // Download as JSON
         const blob = new Blob([JSON.stringify(fixtures, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1079,253 +807,6 @@ class MantraCounter {
         a.download = 'mantra-test-fixtures.json';
         a.click();
         URL.revokeObjectURL(url);
-
-        console.log('Exported test fixtures:', fixtures);
-    }
-
-    delay(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    // Wait for silence before celebrating (so user can finish their chant)
-    waitForSilenceThenCelebrate() {
-        const bufferLength = this.analyser.fftSize;
-        const dataArray = new Float32Array(bufferLength);
-        const silenceThreshold = 0.01;
-        let silenceFrames = 0;
-        const requiredSilenceFrames = 60; // ~1 second of silence
-
-        const checkSilence = () => {
-            if (!this.isListening) {
-                // If stopped listening, celebrate immediately
-                this.celebrateCompletion(false); // Auto-hide after 5 seconds
-                return;
-            }
-
-            this.analyser.getFloatTimeDomainData(dataArray);
-            const rms = Math.sqrt(dataArray.reduce((sum, x) => sum + x * x, 0) / dataArray.length);
-
-            if (rms < silenceThreshold) {
-                silenceFrames++;
-                if (silenceFrames >= requiredSilenceFrames) {
-                    this.celebrateCompletion(false); // Auto-hide after 5 seconds
-                    return;
-                }
-            } else {
-                silenceFrames = 0; // Reset if sound detected
-            }
-
-            requestAnimationFrame(checkSilence);
-        };
-
-        checkSilence();
-    }
-
-    // Celebration effect when goal is reached
-    celebrateCompletion(keepVisible = false) {
-        // Stop listening and turn off mic (only if actually listening)
-        if (this.isListening) {
-            this.stopListening();
-        }
-
-        const overlay = document.getElementById('completion-overlay');
-        const completionCount = document.getElementById('completion-count');
-        const dismissBtn = document.getElementById('dismiss-completion-btn');
-
-        if (!overlay) return;
-
-        completionCount.textContent = `${this.count} mantras completed`;
-
-        // Show overlay
-        overlay.style.display = 'flex';
-        overlay.classList.add('active');
-
-        // Track if user wants to keep it visible
-        let userKeepVisible = keepVisible; // Start with passed parameter
-        let autoHideTimer = null;
-
-        // Dismiss button handler
-        const dismiss = () => {
-            overlay.classList.remove('active');
-            setTimeout(() => {
-                overlay.style.display = 'none';
-            }, 1000);
-            if (autoHideTimer) {
-                clearTimeout(autoHideTimer);
-            }
-        };
-
-        if (dismissBtn) {
-            dismissBtn.onclick = dismiss;
-        }
-
-        // Play zen chime sound
-        this.playCompletionSound().catch(err => {
-            console.warn('Completion sound failed:', err);
-        });
-
-        // Create particles
-        this.createParticles();
-
-        // Auto-hide after 5 seconds (unless keepVisible is true or user toggles it)
-        if (!keepVisible) {
-            autoHideTimer = setTimeout(() => {
-                if (!userKeepVisible) {
-                    dismiss();
-                }
-            }, 5000);
-        }
-
-        // Click anywhere on overlay to toggle keep visible
-        overlay.onclick = (e) => {
-            // Don't toggle if clicking the dismiss button
-            if (e.target === dismissBtn || dismissBtn.contains(e.target)) {
-                return;
-            }
-            // Toggle keep visible
-            userKeepVisible = !userKeepVisible;
-            if (userKeepVisible) {
-                // Cancel auto-hide
-                if (autoHideTimer) {
-                    clearTimeout(autoHideTimer);
-                    autoHideTimer = null;
-                }
-                overlay.style.cursor = 'pointer';
-            } else {
-                // Restart auto-hide
-                autoHideTimer = setTimeout(() => {
-                    dismiss();
-                }, 5000);
-                overlay.style.cursor = 'default';
-            }
-        };
-    }
-
-    async playCompletionSound() {
-        // If audio context is closed or doesn't exist, create a new one just for the sound
-        let audioContext = this.audioContext;
-        let shouldCleanup = false;
-
-        if (!audioContext || audioContext.state === 'closed') {
-            // Create a temporary audio context just for the completion sound
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            shouldCleanup = true;
-            console.log('Created new audio context for completion sound');
-        }
-
-        try {
-            // Resume audio context if suspended (required for iOS)
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
-                console.log('Audio context resumed for completion sound');
-            }
-
-            // Create a gentle gong-like sound with fade in/out
-            // Using multiple harmonics for a rich, resonant sound
-            const baseFreq = 220; // A3 - lower, more mellow
-            const harmonics = [
-                { freq: baseFreq, amplitude: 0.15, delay: 0 },
-                { freq: baseFreq * 2, amplitude: 0.12, delay: 50 },
-                { freq: baseFreq * 3, amplitude: 0.08, delay: 100 },
-                { freq: baseFreq * 4.76, amplitude: 0.06, delay: 150 }, // Approximate 5th harmonic
-            ];
-
-            const duration = 2.5; // Longer, more meditative
-            const fadeInTime = 0.4;
-            const fadeOutTime = 1.8;
-
-            harmonics.forEach((harmonic, i) => {
-                setTimeout(() => {
-                    try {
-                        const osc = audioContext.createOscillator();
-                        const gain = audioContext.createGain();
-
-                        // Use a mix of sine and triangle for warmer tone
-                        osc.type = i === 0 ? 'sine' : 'triangle';
-                        osc.frequency.setValueAtTime(harmonic.freq, audioContext.currentTime);
-
-                        const now = audioContext.currentTime;
-
-                        // Fade in
-                        gain.gain.setValueAtTime(0, now);
-                        gain.gain.linearRampToValueAtTime(harmonic.amplitude, now + fadeInTime);
-
-                        // Hold
-                        gain.gain.setValueAtTime(harmonic.amplitude, now + fadeInTime);
-
-                        // Fade out (long, gentle decay)
-                        gain.gain.exponentialRampToValueAtTime(0.001, now + fadeOutTime);
-
-                        osc.connect(gain);
-                        gain.connect(audioContext.destination);
-
-                        osc.start(now);
-                        osc.stop(now + duration);
-                    } catch (err) {
-                        console.warn('Error playing harmonic:', err);
-                    }
-                }, harmonic.delay);
-            });
-
-            // Clean up temporary audio context after sound finishes (if we created one)
-            if (shouldCleanup) {
-                setTimeout(() => {
-                    try {
-                        if (audioContext && audioContext.state !== 'closed') {
-                            audioContext.close().catch(console.error);
-                        }
-                    } catch (err) {
-                        console.warn('Error closing temporary audio context:', err);
-                    }
-                }, duration * 1000 + 500); // Wait for sound to finish + buffer
-            }
-        } catch (err) {
-            console.warn('Error playing completion sound:', err);
-            // Clean up temporary audio context on error
-            if (shouldCleanup && audioContext && audioContext.state !== 'closed') {
-                audioContext.close().catch(console.error);
-            }
-        }
-    }
-
-    createParticles() {
-        const particlesContainer = document.getElementById('particles');
-        if (!particlesContainer) return;
-
-        particlesContainer.innerHTML = '';
-
-        const particleCount = 30;
-        const colors = ['#e94560', '#4ade80', '#fbbf24', '#60a5fa', '#a78bfa'];
-
-        for (let i = 0; i < particleCount; i++) {
-            const particle = document.createElement('div');
-            particle.className = 'particle';
-
-            const size = Math.random() * 8 + 4;
-            const color = colors[Math.floor(Math.random() * colors.length)];
-            const startX = Math.random() * 100;
-            const startY = Math.random() * 100;
-            const duration = Math.random() * 2 + 3;
-            const delay = Math.random() * 0.5;
-
-            // Random direction for particle
-            const angle = Math.random() * Math.PI * 2;
-            const distance = 100 + Math.random() * 100;
-            const dx = Math.cos(angle) * distance;
-            const dy = Math.sin(angle) * distance;
-
-            particle.style.width = `${size}px`;
-            particle.style.height = `${size}px`;
-            particle.style.background = color;
-            particle.style.left = `${startX}%`;
-            particle.style.top = `${startY}%`;
-            particle.style.animationDelay = `${delay}s`;
-            particle.style.animationDuration = `${duration}s`;
-            particle.style.setProperty('--dx', `${dx}px`);
-            particle.style.setProperty('--dy', `${dy}px`);
-
-            particlesContainer.appendChild(particle);
-        }
     }
 }
 
@@ -1333,4 +814,3 @@ class MantraCounter {
 document.addEventListener('DOMContentLoaded', () => {
     window.mantraCounter = new MantraCounter();
 });
-

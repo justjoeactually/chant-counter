@@ -22,7 +22,6 @@ class MantraCounter {
         this.count = 0; // Always start at 0 on page load
         this.goal = 33; // Default goal
         this.lastMatchTime = 0;
-        this.inCooldown = false; // Prevent double counting
 
         // Settings
         this.similarityThreshold = 0.75; // 75% - works well with cosine + energy weighting
@@ -87,11 +86,11 @@ class MantraCounter {
         };
 
         // Button state tracking
-        this.buttonState = 'record'; // 'record' | 'confirm' | 'listening' | 'stop'
+        // Since we use energy-based detection, we can start listening without a template
+        this.buttonState = 'listening'; // 'record' | 'confirm' | 'listening' | 'stop'
 
         // Initialize button state
         if (this.templateEnvelope) {
-            this.buttonState = 'listening';
             this.elements.resetMantraBtn.style.display = 'inline-block';
         }
         // Show reset counter button if count > 0 (though it should always be 0 on load now)
@@ -625,11 +624,6 @@ class MantraCounter {
 
     // Listening mode
     async startListening() {
-        if (!this.templateEnvelope) {
-            this.setStatus('No template recorded');
-            return;
-        }
-
         await this.initAudio();
 
         // Ensure audio context is running (required for iOS)
@@ -641,7 +635,7 @@ class MantraCounter {
         this.isListening = true;
         this.buttonState = 'stop';
         this.updateMainButton();
-        this.setStatus('Listening for mantras...', 'listening');
+        this.setStatus('Listening for chants (energy-based detection)...', 'listening');
 
         this.startVisualization();
         this.startDetection();
@@ -651,113 +645,91 @@ class MantraCounter {
         const bufferLength = this.analyser.fftSize;
         const dataArray = new Float32Array(bufferLength);
 
-        // Sliding window buffer - store enough samples for template duration + margin
-        // We'll continuously check the last N seconds where N = template duration
-        const windowSamples = Math.ceil(this.templateBuffer.length * 2); // Store 2x template for lookback
-        let slidingBuffer = new Float32Array(windowSamples);
-        let bufferIndex = 0;
+        // Simple energy-based state machine for slow chants like "Ohhhhmmm"
+        // The chant has transitions (ooo -> uuu -> mmm) that aren't silence
+        // True silence is a deep breath between chants
+        let state = 'waiting';
 
-        // Continuous matching state
+        // Energy thresholds - three levels to distinguish chanting from transitions from silence
         const isMobile = this.isMobileDevice();
-        let matchStreak = 0; // How many consecutive frames had high similarity
-        // Mobile may need slightly lower streak requirement due to different audio characteristics
-        const minMatchStreak = isMobile ? 6 : 8; // Require sustained match (increased to prevent counting on transitions)
-        const checkInterval = 10; // Check every N frames (not every frame for performance)
-        let frameCount = 0;
+        const loudThreshold = isMobile ? 0.008 : 0.012; // Active chanting (any part of "Ohm")
+        const transitionThreshold = isMobile ? 0.002 : 0.003; // Soft sounds (transitions, quiet "mmm")
+        const silenceThreshold = isMobile ? 0.0008 : 0.001; // True silence (deep breath)
 
-        // Track energy levels to detect transitions
-        let recentEnergies = [];
-        const energyHistorySize = 20;
+        // Timing - designed for slow chants
+        const minChantDuration = 500; // Minimum ms of sound to count as a real chant
+        const minSilenceDuration = 600; // Need sustained silence (deep breath) - not just a brief pause
+        const debounceTime = 800; // Minimum ms between counts
 
-        // Energy-based activity detection (but don't wait for silence)
-        // Mobile devices may have different audio levels, so adjust threshold
-        const minEnergyThreshold = isMobile ? 0.002 : 0.005; // Lower threshold for mobile
+        let chantStartTime = 0;
+        let silenceStartTime = 0;
+        let lastCountTime = 0;
+        let hasHadLoudSound = false; // Track if we've had actual loud chanting
 
         const detect = () => {
             if (!this.isListening) return;
 
             this.analyser.getFloatTimeDomainData(dataArray);
 
-            // Calculate current RMS for activity detection (with sensitivity applied)
+            // Calculate current RMS energy
             const rms = Math.sqrt(dataArray.reduce((sum, x) => sum + x * x, 0) / dataArray.length);
+            const now = Date.now();
 
-            // Track energy history to detect transitions
-            recentEnergies.push(rms);
-            if (recentEnergies.length > energyHistorySize) {
-                recentEnergies.shift();
+            // Skip if in cooldown
+            if (now - lastCountTime < debounceTime) {
+                requestAnimationFrame(detect);
+                return;
             }
 
-            // Calculate energy trend (is it dropping rapidly? = transition)
-            const avgRecentEnergy = recentEnergies.reduce((a, b) => a + b, 0) / recentEnergies.length;
-            const recentMax = Math.max(...recentEnergies);
-            const energyDrop = recentMax > 0 ? (recentMax - avgRecentEnergy) / recentMax : 0;
-            const isTransitioning = energyDrop > 0.3 && recentEnergies.length >= 10; // Significant drop = transition
-
-            // Add to sliding buffer
-            for (let i = 0; i < dataArray.length; i++) {
-                slidingBuffer[bufferIndex % windowSamples] = dataArray[i];
-                bufferIndex++;
-            }
-
-            frameCount++;
-
-            // Only check for matches periodically (not every frame) and when there's some activity
-            // Skip during transitions (loud->soft) to prevent counting on humming
-            if (frameCount % checkInterval === 0 && rms > minEnergyThreshold && !isTransitioning) {
-                const now = Date.now();
-
-                // Skip if in cooldown
-                if (this.inCooldown) {
-                    matchStreak = 0; // Reset streak during cooldown
-                    requestAnimationFrame(detect);
-                    return;
+            // State machine logic
+            if (state === 'waiting') {
+                // Waiting for a chant to start
+                if (rms > loudThreshold) {
+                    // Loud chanting detected - start tracking
+                    state = 'chanting';
+                    chantStartTime = now;
+                    silenceStartTime = 0;
+                    hasHadLoudSound = true;
+                    console.log(`Chant started (rms: ${rms.toFixed(4)})`);
                 }
+            } else if (state === 'chanting') {
+                // We're in a chant, looking for true silence (deep breath)
 
-                // Extract the most recent window (last template duration worth of samples)
-                const windowStart = bufferIndex - this.templateBuffer.length;
-                const windowEnd = bufferIndex;
-
-                // Extract segment from sliding buffer
-                const segment = new Float32Array(this.templateBuffer.length);
-                for (let i = 0; i < this.templateBuffer.length; i++) {
-                    const idx = (windowStart + i + windowSamples) % windowSamples;
-                    segment[i] = slidingBuffer[idx];
-                }
-
-                // Check similarity
-                const segmentEnvelope = this.extractEnvelope(segment);
-                const similarity = this.computeSimilarity(this.templateEnvelope, segmentEnvelope);
-
-                // Debug logging for mobile (helps diagnose detection issues)
-                // Only log every 100 frames to avoid spam
-                if (isMobile && frameCount % (checkInterval * 10) === 0) {
-                    console.log('Detection check:', {
-                        rms: rms.toFixed(4),
-                        similarity: (similarity * 100).toFixed(1) + '%',
-                        threshold: (this.similarityThreshold * 100).toFixed(1) + '%',
-                        streak: matchStreak,
-                        inCooldown: this.inCooldown
-                    });
-                }
-
-                // Track match streak - need sustained high similarity
-                if (similarity >= this.similarityThreshold) {
-                    matchStreak++;
-
-                    // Only trigger match after sustained high similarity
-                    // This prevents counting during transitions (loud->soft) or brief matches
-                    if (matchStreak >= minMatchStreak &&
-                        now - this.lastMatchTime > this.debounceTime) {
-
-                        console.log(`Match detected! Similarity: ${(similarity * 100).toFixed(1)}%, Streak: ${matchStreak}`);
-                        this.lastMatchTime = now;
-                        this.onMatch(similarity);
-                        matchStreak = 0; // Reset after match
+                if (rms > loudThreshold) {
+                    // Active loud chanting - reset silence timer, still in chant
+                    silenceStartTime = 0;
+                    hasHadLoudSound = true;
+                } else if (rms > transitionThreshold) {
+                    // Soft sound - could be "mmm" ending or transition
+                    // This is NOT silence, just a quieter part of the chant
+                    // Reset silence timer but stay in chanting state
+                    silenceStartTime = 0;
+                } else if (rms > silenceThreshold) {
+                    // Very quiet - might be starting silence, but wait to confirm
+                    if (silenceStartTime === 0) {
+                        silenceStartTime = now;
                     }
+                    // Don't count yet - need sustained true silence
                 } else {
-                    // Reset streak if similarity drops
-                    if (matchStreak > 0) {
-                        matchStreak = Math.max(0, matchStreak - 1); // Gradual decay
+                    // True silence (deep breath territory)
+                    if (silenceStartTime === 0) {
+                        silenceStartTime = now;
+                    }
+
+                    const silenceDuration = now - silenceStartTime;
+                    const chantDuration = silenceStartTime > 0 ? silenceStartTime - chantStartTime : now - chantStartTime;
+
+                    // Count if: sustained silence + actual chant happened + had loud sound
+                    if (silenceDuration >= minSilenceDuration &&
+                        chantDuration >= minChantDuration &&
+                        hasHadLoudSound) {
+                        console.log(`Chant completed (${chantDuration.toFixed(0)}ms chant, ${silenceDuration.toFixed(0)}ms silence)`);
+                        this.onMatch(1.0);
+                        lastCountTime = now;
+                        state = 'waiting';
+                        chantStartTime = 0;
+                        silenceStartTime = 0;
+                        hasHadLoudSound = false;
                     }
                 }
             }
@@ -769,9 +741,6 @@ class MantraCounter {
     }
 
     onMatch(score) {
-        // Enter cooldown to prevent double counting
-        this.inCooldown = true;
-
         this.count++;
         this.updateDisplay();
         // Don't save count (it resets on reload)
@@ -782,7 +751,7 @@ class MantraCounter {
             this.elements.resetCounterBtn.style.display = 'inline-block';
         }
 
-        console.log(`Match! Count: ${this.count}, Score: ${(score * 100).toFixed(1)}%`);
+        console.log(`Count: ${this.count}`);
 
         // Visual feedback
         this.elements.currentCount.style.transform = 'scale(1.2)';
@@ -797,12 +766,6 @@ class MantraCounter {
             // Wait for silence before celebrating
             this.waitForSilenceThenCelebrate();
         }
-
-        // Exit cooldown after matchCooldown period
-        setTimeout(() => {
-            this.inCooldown = false;
-            console.log('Cooldown ended - ready for next detection');
-        }, this.matchCooldown);
     }
 
     stopListening() {

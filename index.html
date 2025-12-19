@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mantra Counter</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Disable Tailwind's preflight to prevent CSS conflicts with custom styles
+        tailwind.config = {
+            corePlugins: {
+                preflight: false,
+            }
+        }
+    </script>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>

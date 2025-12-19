@@ -10,6 +10,9 @@
     <div class="container">
         <header>
             <h1>Mantra Counter</h1>
+            <nav class="header-nav">
+                <a href="test.html" class="nav-link">🧪 Test Mode</a>
+            </nav>
         </header>
 
         <main>
@@ -17,7 +20,7 @@
             <section class="goal-section">
                 <label for="goal-input">Goal</label>
                 <div class="goal-controls">
-                    <input type="number" id="goal-input" min="1" value="108" placeholder="108">
+                    <input type="number" id="goal-input" min="1" value="33" placeholder="33">
                     <button id="set-goal-btn">Set Goal</button>
                 </div>
             </section>
@@ -27,7 +30,7 @@
                 <div class="counter-display">
                     <span id="current-count">0</span>
                     <span class="separator">/</span>
-                    <span id="goal-display">108</span>
+                    <span id="goal-display">33</span>
                 </div>
                 <div class="progress-container">
                     <div class="progress-bar" id="progress-bar"></div>
@@ -39,15 +42,13 @@
             <section class="recording-section">
                 <div class="status" id="status">Ready to record mantra template</div>
 
-                <div class="recording-controls">
-                    <button id="record-btn" class="btn-primary">Record Mantra</button>
-                    <button id="confirm-btn" class="btn-secondary" disabled>Confirm Mantra</button>
+                <div class="main-control">
+                    <button id="main-action-btn" class="btn-record">Record</button>
                 </div>
 
-                <div class="listening-controls" style="display: none;">
-                    <button id="start-listening-btn" class="btn-primary">Start Listening</button>
-                    <button id="stop-listening-btn" class="btn-danger" disabled>Stop Listening</button>
-                    <button id="reset-btn" class="btn-secondary">Reset Mantra</button>
+                <div class="secondary-controls">
+                    <button id="reset-counter-btn" class="btn-secondary" style="display: none;">Reset Counter</button>
+                    <button id="reset-mantra-btn" class="btn-secondary" style="display: none;">Reset Mantra</button>
                 </div>
             </section>
 
@@ -75,14 +76,34 @@
                 <details>
                     <summary>Tuning Settings</summary>
                     <div class="tuning-controls">
-                        <label>
-                            Similarity Threshold: <span id="threshold-value">0.75</span>
-                            <input type="range" id="threshold-slider" min="0.3" max="0.95" step="0.05" value="0.75">
-                        </label>
-                        <label>
-                            Debounce Time (ms): <span id="debounce-value">2000</span>
-                            <input type="range" id="debounce-slider" min="500" max="5000" step="100" value="2000">
-                        </label>
+                        <div class="setting-item">
+                            <label>
+                                Mic Sensitivity: <span id="sensitivity-value">1.0</span>x
+                                <input type="range" id="sensitivity-slider" min="0.5" max="3.0" step="0.1" value="1.0">
+                            </label>
+                            <p class="setting-description">Boosts quiet sounds like humming. Increase if humming isn't detected. No need to re-record your template - this applies to live audio only.</p>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                Similarity Threshold: <span id="threshold-value">0.75</span>
+                                <input type="range" id="threshold-slider" min="0.3" max="0.95" step="0.05" value="0.75">
+                            </label>
+                            <p class="setting-description">How similar a sound must be to your template to count. Lower = more sensitive, Higher = stricter.</p>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                Debounce Time (ms): <span id="debounce-value">3000</span>
+                                <input type="range" id="debounce-slider" min="1000" max="6000" step="100" value="3000">
+                            </label>
+                            <p class="setting-description">Minimum time between matches. Increase if you're getting double counts.</p>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                Cooldown After Match (ms): <span id="cooldown-value">4000</span>
+                                <input type="range" id="cooldown-slider" min="2000" max="8000" step="100" value="4000">
+                            </label>
+                            <p class="setting-description">Time to ignore all detections after a match. Prevents counting during transitions.</p>
+                        </div>
                     </div>
                 </details>
             </section>
@@ -93,6 +114,25 @@
                 <div id="match-log" class="match-log"></div>
             </section>
         </main>
+    </div>
+
+    <!-- Completion effect overlay -->
+    <div id="completion-overlay" class="completion-overlay">
+        <div class="completion-content">
+            <div class="completion-icon">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Simple Buddha silhouette -->
+                    <circle cx="50" cy="30" r="18" fill="currentColor" opacity="0.9"/>
+                    <ellipse cx="50" cy="65" rx="28" ry="35" fill="currentColor" opacity="0.9"/>
+                    <circle cx="45" cy="28" r="3" fill="white"/>
+                    <circle cx="55" cy="28" r="3" fill="white"/>
+                    <path d="M 45 35 Q 50 38 55 35" stroke="white" stroke-width="2" fill="none"/>
+                </svg>
+            </div>
+            <h2>Goal Achieved!</h2>
+            <p id="completion-count"></p>
+        </div>
+        <div class="particles" id="particles"></div>
     </div>
 
     <script src="app.js"></script>

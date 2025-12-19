@@ -11,7 +11,7 @@
         <header>
             <h1>Mantra Counter</h1>
             <nav class="header-nav">
-                <a href="test.html" class="nav-link">🧪 Test Mode</a>
+                <a href="test.html" class="nav-link">🧪 Unit Tests</a>
             </nav>
         </header>
 
@@ -36,6 +36,9 @@
                     <div class="progress-bar" id="progress-bar"></div>
                 </div>
                 <div class="progress-percent" id="progress-percent">0%</div>
+                <div class="counter-actions">
+                    <button id="manual-increment-btn" class="btn-manual-increment" title="Manually add one if detection missed">+1</button>
+                </div>
             </section>
 
             <!-- Recording Controls -->
@@ -55,20 +58,6 @@
             <!-- Waveform Visualization -->
             <section class="visualization-section">
                 <canvas id="waveform" width="600" height="100"></canvas>
-            </section>
-
-            <!-- Test Mode -->
-            <section class="test-section">
-                <div class="test-toggle">
-                    <label>
-                        <input type="checkbox" id="test-mode-toggle">
-                        Test Mode (Record mantra + 5 repetitions)
-                    </label>
-                </div>
-                <div class="test-controls" style="display: none;">
-                    <button id="run-test-btn" class="btn-primary">Run Test</button>
-                    <div class="test-results" id="test-results"></div>
-                </div>
             </section>
 
             <!-- Debug/Tuning -->
@@ -113,20 +102,63 @@
                 <h3>Match Log</h3>
                 <div id="match-log" class="match-log"></div>
             </section>
+
+            <!-- Test Mode -->
+            <section class="test-section">
+                <div class="test-toggle">
+                    <label>
+                        <input type="checkbox" id="test-mode-toggle">
+                        Test Mode (Record mantra + 5 repetitions)
+                    </label>
+                </div>
+                <div class="test-controls" style="display: none;">
+                    <button id="run-test-btn" class="btn-primary">Run Test</button>
+                    <div class="test-results" id="test-results"></div>
+                </div>
+            </section>
+
         </main>
     </div>
 
     <!-- Completion effect overlay -->
     <div id="completion-overlay" class="completion-overlay">
-        <div class="completion-content">
-            <div class="completion-icon">
+            <div class="completion-content">
+                <button id="dismiss-completion-btn" class="btn-dismiss" title="Close">×</button>
+                <div class="completion-icon">
                 <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-                    <!-- Simple Buddha silhouette -->
-                    <circle cx="50" cy="30" r="18" fill="currentColor" opacity="0.9"/>
-                    <ellipse cx="50" cy="65" rx="28" ry="35" fill="currentColor" opacity="0.9"/>
-                    <circle cx="45" cy="28" r="3" fill="white"/>
-                    <circle cx="55" cy="28" r="3" fill="white"/>
-                    <path d="M 45 35 Q 50 38 55 35" stroke="white" stroke-width="2" fill="none"/>
+                    <!-- Meditating Monk -->
+                    <!-- Head (skin tone) -->
+                    <circle cx="50" cy="28" r="12" fill="#f4c2a1"/>
+                    <!-- Neck -->
+                    <rect x="46" y="38" width="8" height="4" fill="#f4c2a1" rx="2"/>
+
+                    <!-- Robe - upper body (orange) -->
+                    <path d="M 35 42 Q 50 45 65 42 L 65 50 Q 50 55 35 50 Z" fill="#ff8c42"/>
+
+                    <!-- Robe - lower body, flowing (darker orange) -->
+                    <ellipse cx="50" cy="68" rx="22" ry="22" fill="#e67e22"/>
+
+                    <!-- Robe folds/details -->
+                    <path d="M 50 50 Q 45 55 50 60 Q 55 55 50 50" stroke="#d35400" stroke-width="1" fill="none" opacity="0.4"/>
+                    <path d="M 50 60 Q 45 65 50 70 Q 55 65 50 60" stroke="#d35400" stroke-width="1" fill="none" opacity="0.4"/>
+
+                    <!-- Arms in meditation pose -->
+                    <ellipse cx="40" cy="52" rx="6" ry="8" fill="#ff8c42" transform="rotate(-20 40 52)"/>
+                    <ellipse cx="60" cy="52" rx="6" ry="8" fill="#ff8c42" transform="rotate(20 60 52)"/>
+
+                    <!-- Hands (skin tone) -->
+                    <circle cx="38" cy="56" r="3" fill="#f4c2a1"/>
+                    <circle cx="62" cy="56" r="3" fill="#f4c2a1"/>
+
+                    <!-- Eyes (closed in meditation) -->
+                    <path d="M 45 26 Q 47 27 45 28" stroke="#2c1810" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                    <path d="M 55 26 Q 53 27 55 28" stroke="#2c1810" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+
+                    <!-- Peaceful smile -->
+                    <path d="M 45 31 Q 50 33 55 31" stroke="#2c1810" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+
+                    <!-- Simple hair/head shape -->
+                    <path d="M 38 20 Q 50 16 62 20 Q 62 24 50 24 Q 38 24 38 20" fill="#2c1810" opacity="0.3"/>
                 </svg>
             </div>
             <h2>Goal Achieved!</h2>

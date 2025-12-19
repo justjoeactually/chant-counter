@@ -71,6 +71,7 @@ class MantraCounter {
             mainActionBtn: document.getElementById('main-action-btn'),
             resetCounterBtn: document.getElementById('reset-counter-btn'),
             resetMantraBtn: document.getElementById('reset-mantra-btn'),
+            manualIncrementBtn: document.getElementById('manual-increment-btn'),
             waveform: document.getElementById('waveform'),
             testModeToggle: document.getElementById('test-mode-toggle'),
             testControls: document.querySelector('.test-controls'),
@@ -105,6 +106,7 @@ class MantraCounter {
         this.elements.mainActionBtn.addEventListener('click', () => this.handleMainAction());
         this.elements.resetCounterBtn.addEventListener('click', () => this.resetCounter());
         this.elements.resetMantraBtn.addEventListener('click', () => this.resetMantra());
+        this.elements.manualIncrementBtn.addEventListener('click', () => this.manualIncrement());
 
         this.elements.testModeToggle.addEventListener('change', (e) => {
             this.testMode = e.target.checked;
@@ -729,6 +731,21 @@ class MantraCounter {
         this.updateMainButton();
         this.setStatus('Listening stopped');
         this.stopVisualization();
+
+        // Stop media stream to turn off mic
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
+        }
+
+        // Clean up audio context
+        if (this.audioContext && this.audioContext.state !== 'closed') {
+            this.audioContext.close().catch(console.error);
+            this.audioContext = null;
+            this.gainNode = null;
+            this.sourceNode = null;
+            this.analyser = null;
+        }
     }
 
     resetCounter() {
@@ -738,6 +755,30 @@ class MantraCounter {
         // Hide reset button when count is 0
         this.elements.resetCounterBtn.style.display = 'none';
         this.setStatus('Counter reset');
+    }
+
+    manualIncrement() {
+        this.count++;
+        this.updateDisplay();
+        this.logMatch(1.0); // Log as 100% match for manual increments
+
+        // Show reset counter button if count > 0
+        if (this.count > 0) {
+            this.elements.resetCounterBtn.style.display = 'inline-block';
+        }
+
+        // Visual feedback
+        this.elements.currentCount.style.transform = 'scale(1.2)';
+        setTimeout(() => {
+            this.elements.currentCount.style.transform = 'scale(1)';
+        }, 200);
+
+        // Check if goal reached
+        if (this.count >= this.goal && !this.goalReached) {
+            this.goalReached = true;
+            this.setStatus(`Goal reached! ${this.count}/${this.goal}`, 'listening');
+            this.celebrateCompletion(true); // true = keep visible (no auto-hide)
+        }
     }
 
     resetMantra() {
@@ -1011,7 +1052,7 @@ class MantraCounter {
         const checkSilence = () => {
             if (!this.isListening) {
                 // If stopped listening, celebrate immediately
-                this.celebrateCompletion();
+                this.celebrateCompletion(false); // Auto-hide after 5 seconds
                 return;
             }
 
@@ -1021,7 +1062,7 @@ class MantraCounter {
             if (rms < silenceThreshold) {
                 silenceFrames++;
                 if (silenceFrames >= requiredSilenceFrames) {
-                    this.celebrateCompletion();
+                    this.celebrateCompletion(false); // Auto-hide after 5 seconds
                     return;
                 }
             } else {
@@ -1035,9 +1076,15 @@ class MantraCounter {
     }
 
     // Celebration effect when goal is reached
-    celebrateCompletion() {
+    celebrateCompletion(keepVisible = false) {
+        // Stop listening and turn off mic (only if actually listening)
+        if (this.isListening) {
+            this.stopListening();
+        }
+
         const overlay = document.getElementById('completion-overlay');
         const completionCount = document.getElementById('completion-count');
+        const dismissBtn = document.getElementById('dismiss-completion-btn');
 
         if (!overlay) return;
 
@@ -1047,23 +1094,70 @@ class MantraCounter {
         overlay.style.display = 'flex';
         overlay.classList.add('active');
 
-        // Play zen chime sound
+        // Track if user wants to keep it visible
+        let userKeepVisible = keepVisible; // Start with passed parameter
+        let autoHideTimer = null;
+
+        // Dismiss button handler
+        const dismiss = () => {
+            overlay.classList.remove('active');
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 1000);
+            if (autoHideTimer) {
+                clearTimeout(autoHideTimer);
+            }
+        };
+
+        if (dismissBtn) {
+            dismissBtn.onclick = dismiss;
+        }
+
+        // Play zen chime sound (may not work on mobile Safari due to autoplay restrictions)
         this.playCompletionSound();
 
         // Create particles
         this.createParticles();
 
-        // Hide after 5 seconds
-        setTimeout(() => {
-            overlay.classList.remove('active');
-            setTimeout(() => {
-                overlay.style.display = 'none';
-            }, 1000);
-        }, 5000);
+        // Auto-hide after 5 seconds (unless keepVisible is true or user toggles it)
+        if (!keepVisible) {
+            autoHideTimer = setTimeout(() => {
+                if (!userKeepVisible) {
+                    dismiss();
+                }
+            }, 5000);
+        }
+
+        // Click anywhere on overlay to toggle keep visible
+        overlay.onclick = (e) => {
+            // Don't toggle if clicking the dismiss button
+            if (e.target === dismissBtn || dismissBtn.contains(e.target)) {
+                return;
+            }
+            // Toggle keep visible
+            userKeepVisible = !userKeepVisible;
+            if (userKeepVisible) {
+                // Cancel auto-hide
+                if (autoHideTimer) {
+                    clearTimeout(autoHideTimer);
+                    autoHideTimer = null;
+                }
+                overlay.style.cursor = 'pointer';
+            } else {
+                // Restart auto-hide
+                autoHideTimer = setTimeout(() => {
+                    dismiss();
+                }, 5000);
+                overlay.style.cursor = 'default';
+            }
+        };
     }
 
     playCompletionSound() {
         if (!this.audioContext) return;
+
+        // Note: Audio may not play on mobile Safari due to autoplay restrictions
+        // This is a browser limitation, not a bug
 
         // Create a gentle gong-like sound with fade in/out
         // Using multiple harmonics for a rich, resonant sound
